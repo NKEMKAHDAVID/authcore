@@ -1,6 +1,7 @@
 package com.authcore.modules.auth;
 
 import com.authcore.modules.auth.dto.AuthResponse;
+import com.authcore.modules.auth.dto.LoginRequest;
 import com.authcore.modules.auth.dto.RegisterRequest;
 import com.authcore.shared.ApiResponse;
 import jakarta.validation.Valid;
@@ -25,5 +26,15 @@ public class AuthController {
         return ResponseEntity
                 .status(HttpStatus.CREATED)
                 .body(ApiResponse.success("Registration successful", response));
+    }
+    @PostMapping("/login")
+    public ResponseEntity<ApiResponse<AuthResponse>> login(
+            @Valid @RequestBody LoginRequest request) {
+
+        AuthResponse response = authService.login(request);
+
+        return ResponseEntity
+                .status(HttpStatus.CREATED)
+                .body(ApiResponse.success("Login successful", response));
     }
 }

@@ -2,6 +2,7 @@ package com.authcore.modules.auth;
 
 import com.authcore.exception.AuthException;
 import com.authcore.modules.auth.dto.AuthResponse;
+import com.authcore.modules.auth.dto.LoginRequest;
 import com.authcore.modules.auth.dto.RegisterRequest;
 import com.authcore.modules.user.AuthProvider;
 import com.authcore.modules.user.Role;
@@ -11,6 +12,7 @@ import com.authcore.modules.user.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -72,6 +74,39 @@ public class AuthService {
                         .map(Role::getName)
                         .collect(Collectors.toSet()))
                 .message("Registration successful. Please check your email to verify your account.")
+                .build();
+    }
+
+    public AuthResponse login(LoginRequest request){
+        User user = userRepository.findByEmail(request.getEmail()).
+                orElseThrow(() -> new AuthException("Incorrect User or Password",
+                        HttpStatus.UNAUTHORIZED));
+
+        if(!passwordEncoder.matches(request.getPassword(), user.getPasswordHash())){
+            throw new AuthException(
+                    "Incorrect User or Password",
+                    HttpStatus.UNAUTHORIZED);
+        }
+        if(!user.isVerified()){
+            throw new AuthException(
+                    "Go and verify your email",
+                    HttpStatus.FORBIDDEN);
+        }
+        if(user.isLocked()){
+            throw new AuthException(
+                    "Wait and try again in 10 minutes",
+                    HttpStatus.FORBIDDEN);
+        }
+
+        return AuthResponse.builder()
+                .userId(user.getId())
+                .email(user.getEmail())
+                .firstName(user.getFirstName())
+                .lastName(user.getLastName())
+                .roles(user.getRoles().stream()
+                        .map(Role::getName)
+                        .collect(Collectors.toSet()))
+                .message("Login successful.")
                 .build();
     }
 }
