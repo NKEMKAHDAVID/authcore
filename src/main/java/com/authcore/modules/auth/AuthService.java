@@ -15,8 +15,11 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import com.authcore.modules.user.UserStateService;
 
+import java.time.LocalDateTime;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -28,6 +31,7 @@ public class AuthService {
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
     private final PasswordEncoder passwordEncoder;
+    private final UserStateService userStateService;
 
     @Transactional
     public AuthResponse register(RegisterRequest request) {
@@ -77,26 +81,62 @@ public class AuthService {
                 .build();
     }
 
+    @Transactional
     public AuthResponse login(LoginRequest request){
         User user = userRepository.findByEmail(request.getEmail()).
                 orElseThrow(() -> new AuthException("Incorrect User or Password",
                         HttpStatus.UNAUTHORIZED));
 
+
+        if(user.isLocked()){
+            if(user.getLockedUntil() != null &&
+                    LocalDateTime.now().isAfter(user.getLockedUntil())){
+
+                user.setLocked(false);
+                user.setLockedUntil(null);
+                user.setFailedLoginAttempts(0);
+                userStateService.saveUserState(user);
+
+
+            } else {
+
+                throw new AuthException(
+                        "Wait and try again in 15 minutes",
+                        HttpStatus.FORBIDDEN);
+            }
+        }
+
         if(!passwordEncoder.matches(request.getPassword(), user.getPasswordHash())){
+
+            int failedLoginAttempts = user.getFailedLoginAttempts();
+            failedLoginAttempts++;
+            user.setFailedLoginAttempts(failedLoginAttempts);
+
+
+            if(failedLoginAttempts >= 5){
+                user.setLocked(true);
+                user.setLockedUntil(LocalDateTime.now().plusMinutes(15));
+            }
+
+            userStateService.saveUserState(user);
+
+
             throw new AuthException(
                     "Incorrect User or Password",
                     HttpStatus.UNAUTHORIZED);
         }
+
+
         if(!user.isVerified()){
             throw new AuthException(
                     "Go and verify your email",
                     HttpStatus.FORBIDDEN);
         }
-        if(user.isLocked()){
-            throw new AuthException(
-                    "Wait and try again in 10 minutes",
-                    HttpStatus.FORBIDDEN);
-        }
+
+        user.setFailedLoginAttempts(0);
+
+
+        userRepository.save(user);
 
         return AuthResponse.builder()
                 .userId(user.getId())
