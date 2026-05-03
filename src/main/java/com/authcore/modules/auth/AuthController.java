@@ -1,8 +1,6 @@
 package com.authcore.modules.auth;
 
-import com.authcore.modules.auth.dto.AuthResponse;
-import com.authcore.modules.auth.dto.LoginRequest;
-import com.authcore.modules.auth.dto.RegisterRequest;
+import com.authcore.modules.auth.dto.*;
 import com.authcore.shared.ApiResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -36,5 +34,23 @@ public class AuthController {
         return ResponseEntity
                 .status(HttpStatus.CREATED)
                 .body(ApiResponse.success("Login successful", response));
+    }
+    @PostMapping("/send-verification")
+    public ResponseEntity<ApiResponse<Void>> send_verification(
+            @Valid @RequestBody SendVerificationRequest request){
+        authService.sendVerification(request);
+
+        return ResponseEntity
+                .status(HttpStatus.ACCEPTED)
+                .body(ApiResponse.success("Verification code sent successfully"));
+    }
+    @PostMapping("/verify-email")
+    public ResponseEntity<ApiResponse<Void>>verify_user(
+            @Valid @RequestBody VerifyEmailRequest request){
+        authService.verifyEmail(request);
+
+        return ResponseEntity
+                .status(HttpStatus.OK)
+                .body(ApiResponse.success("Verification successful"));
     }
 }

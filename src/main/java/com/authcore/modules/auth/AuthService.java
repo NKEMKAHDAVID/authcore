@@ -1,9 +1,9 @@
 package com.authcore.modules.auth;
 
 import com.authcore.exception.AuthException;
-import com.authcore.modules.auth.dto.AuthResponse;
-import com.authcore.modules.auth.dto.LoginRequest;
-import com.authcore.modules.auth.dto.RegisterRequest;
+import com.authcore.modules.auth.dto.*;
+import com.authcore.modules.token.EmailVerificationToken;
+import com.authcore.modules.token.EmailVerificationTokenRepository;
 import com.authcore.modules.user.AuthProvider;
 import com.authcore.modules.user.Role;
 import com.authcore.modules.user.RoleRepository;
@@ -19,6 +19,7 @@ import com.authcore.modules.user.UserStateService;
 
 import java.time.LocalDateTime;
 import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 
 @Service
@@ -30,6 +31,7 @@ public class AuthService {
     private final RoleRepository roleRepository;
     private final PasswordEncoder passwordEncoder;
     private final UserStateService userStateService;
+    private final EmailVerificationTokenRepository emailVerificationTokenRepository;
 
     @Transactional
     public AuthResponse register(RegisterRequest request) {
@@ -88,7 +90,7 @@ public class AuthService {
 
         if(user.isLocked()){
             if(user.getLockedUntil() != null &&
-                    LocalDateTime.now().isAfter(user.getLockedUntil())){
+                    !LocalDateTime.now().isBefore(user.getLockedUntil())){
 
                 user.setLocked(false);
                 user.setLockedUntil(null);
@@ -146,5 +148,53 @@ public class AuthService {
                         .collect(Collectors.toSet()))
                 .message("Login successful.")
                 .build();
+    }
+
+    @Transactional
+    public void sendVerification(SendVerificationRequest request){
+        User user = userRepository.findByEmail(request.getEmail())
+                .orElseThrow(() -> new AuthException("User not found", HttpStatus.NOT_FOUND));
+
+        if(user.isVerified())throw new AuthException("User is already verified", HttpStatus.CONFLICT);
+
+        emailVerificationTokenRepository.deleteByUser(user);
+
+        int intCode = ThreadLocalRandom.current().nextInt(100000, 1000000);
+        String stringCode = String.valueOf(intCode);
+
+        String hashedCode = passwordEncoder.encode(stringCode);
+
+        EmailVerificationToken emailVerificationToken = EmailVerificationToken.builder()
+                .user(user)
+                .tokenHash(hashedCode)
+                .used(false)
+                .expiresAt(LocalDateTime.now().plusMinutes(30))
+                .build();
+
+       emailVerificationTokenRepository.save(emailVerificationToken);
+
+        log.info("Verification code for {}: {}", user.getEmail(), intCode);
+    }
+
+    @Transactional
+    public void verifyEmail(VerifyEmailRequest request){
+        User user = userRepository.findByEmail(request.getEmail())
+                .orElseThrow(() -> new AuthException("User not found", HttpStatus.NOT_FOUND));
+
+        if(user.isVerified())throw new AuthException("User is already verified", HttpStatus.NOT_FOUND);
+
+        EmailVerificationToken token = emailVerificationTokenRepository.findByUserAndUsedFalse(user)
+                .orElseThrow(() -> new AuthException("Invalid token", HttpStatus.NOT_FOUND));
+
+        if(token.getExpiresAt().isBefore(LocalDateTime.now())){
+            throw new AuthException("This code as expired", HttpStatus.FORBIDDEN);
+        }
+        if(!passwordEncoder.matches(request.getVerificationCode(), token.getTokenHash())){
+            throw new AuthException("Invalid verification code ", HttpStatus.FORBIDDEN);
+        }
+        token.setUsed(true);
+        user.setVerified(true);
+        userRepository.save(user);
+        emailVerificationTokenRepository.save(token);
     }
 }
