@@ -16,4 +16,8 @@ public class AuthResponse {
     private String lastName;
     private Set<String> roles;
     private String message;
+
+    // The short-lived JWT the client stores in memory (NOT localStorage)
+    // Included on login. Null on register (user must verify email first).
+    private String accessToken;
 }
