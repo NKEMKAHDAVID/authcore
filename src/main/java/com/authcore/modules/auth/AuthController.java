@@ -60,4 +60,5 @@ public class AuthController {
                 .status(HttpStatus.OK)
                 .body(ApiResponse.success("Email verified successfully"));
     }
+    //GOD IS GREAT
 }
