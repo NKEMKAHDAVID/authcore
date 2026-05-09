@@ -13,17 +13,22 @@ import com.authcore.modules.user.User;
 import com.authcore.modules.user.UserRepository;
 import com.authcore.modules.user.UserStateService;
 import com.authcore.security.JwtService;
+import com.authcore.security.TokenBlacklistService;
+import io.jsonwebtoken.Claims;
 import jakarta.servlet.http.Cookie;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
+import java.net.http.HttpResponse;
+import java.time.*;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
@@ -41,6 +46,7 @@ public class AuthService {
     private final EmailVerificationTokenRepository emailVerificationTokenRepository;
     private final RefreshTokenRepository refreshTokenRepository;
     private final JwtService jwtService;
+    private final TokenBlacklistService tokenBlacklistService;
 
     // Refresh token expiry in milliseconds — used to set cookie max-age
     @Value("${jwt.refresh-expiration}")
@@ -153,7 +159,7 @@ public class AuthService {
         String accessToken = jwtService.generateAccessToken(user.getId(), user.getEmail(), roles);
 
         // 8. Generate refresh token (long-lived, goes in HttpOnly cookie)
-        String rawRefreshToken = jwtService.generateRefreshToken(user.getId());
+        String rawRefreshToken = jwtService.generateRefreshToken();
 
         // 9. Revoke any existing refresh tokens for this user before issuing a new one
         //    One active refresh token per user keeps things clean and detectable
@@ -246,5 +252,98 @@ public class AuthService {
         user.setVerified(true);
         userRepository.save(user);
         emailVerificationTokenRepository.save(token);
+    }
+
+    @Transactional
+    public void logout(HttpServletRequest request, HttpServletResponse response) {
+
+        // ── ACCESS TOKEN ──────────────────────────────────────────────────────
+        // Read the Authorization header — must be present and must be a Bearer token
+        String header = request.getHeader("Authorization");
+
+        if (header == null || !header.startsWith("Bearer ")) {
+            throw new AuthException(
+                    "Missing or invalid Authorization header",
+                    HttpStatus.UNAUTHORIZED
+            );
+        }
+
+        // Strip "Bearer " prefix to get the raw JWT string
+        String token = header.substring(7);
+
+        // Validate signature + expiry, extract claims
+        // This throws AuthException if token is invalid or already expired
+        Claims claims = jwtService.validateAndExtractClaims(token);
+
+        // Calculate how long until this token naturally expires
+        // We store it in Redis for exactly this long — once it would have expired
+        // anyway, Redis auto-deletes the blacklist entry (keeps memory bounded)
+        long remainingMillis = claims.getExpiration().getTime() - System.currentTimeMillis();
+        tokenBlacklistService.blacklist(token, remainingMillis);
+
+        // ── REFRESH TOKEN ─────────────────────────────────────────────────────
+        // Cookies can be null if the client sent no cookies at all
+        Cookie[] cookies = request.getCookies();
+
+        if (cookies != null) {
+            Cookie refreshCookie = null;
+
+            // Find our specific refresh token cookie by name
+            for (Cookie c : cookies) {
+                if ("refresh_token".equals(c.getName())) {
+                    refreshCookie = c;
+                    break;
+                }
+            }
+
+            if (refreshCookie != null) {
+                String rawRefreshToken = refreshCookie.getValue();
+
+                try {
+                    // Validate the refresh token and extract claims
+                    Claims refreshClaims = jwtService.validateAndExtractClaims(rawRefreshToken);
+
+                    // userId was stored as the subject (sub claim) — not as a custom claim
+                    // We use findById because we have the ID directly — no need for email lookup
+                    UUID userId = UUID.fromString(refreshClaims.getSubject());
+
+                    User user = userRepository.findById(userId)
+                            .orElseThrow(() -> new AuthException(
+                                    "User not found",
+                                    HttpStatus.UNAUTHORIZED
+                            ));
+
+                    // Find the active (non-revoked) refresh token for this user
+                    RefreshToken storedToken = refreshTokenRepository
+                            .findByUserAndRevokedFalse(user)
+                            .orElse(null);
+
+                    // BCrypt match: raw token from cookie vs stored hash in database
+                    // Same principle as password verification — we never stored the raw token
+                    if (storedToken != null &&
+                            passwordEncoder.matches(rawRefreshToken, storedToken.getTokenHash())) {
+                        storedToken.setRevoked(true);
+                        refreshTokenRepository.save(storedToken);
+                    }
+
+                } catch (Exception ignored) {
+                    // If refresh token is invalid or expired during logout, that's fine
+                    // The access token is already blacklisted — logout still succeeds
+                    log.debug("Refresh token invalid during logout — continuing anyway");
+                }
+            }
+        }
+
+        // ── CLEAR COOKIE ──────────────────────────────────────────────────────
+        // Overwrite the cookie with an empty value and maxAge=0
+        // maxAge=0 tells the browser to delete it immediately
+        // Must use the same path as the original cookie or the browser won't match it
+        Cookie clearCookie = new Cookie("refresh_token", "");
+        clearCookie.setHttpOnly(true);
+        clearCookie.setMaxAge(0);
+        clearCookie.setPath("/api/v1/auth/refresh");
+        response.addCookie(clearCookie);
+
+        log.info("User logged out successfully");
     }
 }

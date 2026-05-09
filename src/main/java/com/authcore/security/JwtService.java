@@ -84,17 +84,12 @@ public class JwtService {
      * Contains only userId — minimal claims by design.
      * This token's hash is stored in the database; it is NOT stored in Redis.
      */
-    public String generateRefreshToken(UUID userId) {
-        Date now = new Date();
-        Date expiry = new Date(now.getTime() + refreshTokenExpiration);
-
-        return Jwts.builder()
-                .subject(userId.toString())
-                .claim("type", "refresh")
-                .issuedAt(now)
-                .expiration(expiry)
-                .signWith(privateKey)
-                .compact();
+    public String generateRefreshToken() {
+        // Generates a cryptographically secure random 32-byte string
+        // Short enough to BCrypt, impossible to guess
+        byte[] randomBytes = new byte[32];
+        new java.security.SecureRandom().nextBytes(randomBytes);
+        return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(randomBytes);
     }
 
     // ─────────────────────────────────────────────
