@@ -2,6 +2,7 @@ package com.authcore.modules.auth;
 
 import com.authcore.modules.auth.dto.*;
 import com.authcore.shared.ApiResponse;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -59,6 +60,18 @@ public class AuthController {
         return ResponseEntity
                 .status(HttpStatus.OK)
                 .body(ApiResponse.success("Email verified successfully"));
+    }
+
+
+    @PostMapping("/logout")
+    public ResponseEntity<ApiResponse<Void>> logout(
+            HttpServletRequest request , HttpServletResponse response){
+
+        authService.logout(request,response);
+
+        return ResponseEntity
+                .status(HttpStatus.OK)
+                .body(ApiResponse.success("Logged out successfully"));
     }
     //GOD IS GREAT
 }
